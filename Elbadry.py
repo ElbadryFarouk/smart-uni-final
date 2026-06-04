@@ -33,7 +33,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-os.environ["GOOGLE_API_KEY"] = "AIzaSyD64xUsN_XnhPXBDU-ZWyf3c623AUrfWtI"
+os.environ["GOOGLE_API_KEY"] = os.environ.get("GOOGLE_API_KEY", "")
 
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
