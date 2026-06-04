@@ -82,6 +82,7 @@ def _init_vectorstore():
     with _init_lock:
         if vectorstore is not None:
             return
+        os.makedirs("./chroma_db", exist_ok=True)
         vectorstore = Chroma(persist_directory="./chroma_db", embedding_function=embedding_fn)
         retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
