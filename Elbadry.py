@@ -68,6 +68,8 @@ class LocalHashEmbeddingFunction(Embeddings):
             vec = [v / total for v in vec]
         return vec
 
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
 
 embedding_fn = LocalHashEmbeddingFunction()
 
@@ -82,6 +84,7 @@ def _init_vectorstore():
     with _init_lock:
         if vectorstore is not None:
             return
+        os.makedirs("/tmp/chroma_db", exist_ok=True)
         vectorstore = Chroma(persist_directory="/tmp/chroma_db", embedding_function=embedding_fn)
         retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
@@ -102,20 +105,14 @@ def _init_vectorstore():
             | StrOutputParser()
         )
 
-
 def get_rag_chain():
     _init_vectorstore()
     if rag_chain is None:
         raise HTTPException(status_code=503, detail="RAG system is initializing. Please try again.")
     return rag_chain
 
-def format_docs(docs):
-    return "\n\n".join(doc.page_content for doc in docs)
-
-
 class ChatRequest(BaseModel):
     question: str
-
 
 def split_text(text: str, chunk_size: int = 1000, chunk_overlap: int = 100) -> List[str]:
     chunks: List[str] = []
@@ -130,7 +127,6 @@ def split_text(text: str, chunk_size: int = 1000, chunk_overlap: int = 100) -> L
             break
     return chunks
 
-
 def split_documents(documents, chunk_size=1000, chunk_overlap=100):
     out = []
     for doc in documents:
@@ -138,11 +134,9 @@ def split_documents(documents, chunk_size=1000, chunk_overlap=100):
             out.append(Document(page_content=piece, metadata=doc.metadata))
     return out
 
-
 @app.get("/")
 async def root():
     return {"status": "ok", "docs": "/docs"}
-
 
 @app.on_event("startup")
 def _warm_up():
@@ -150,7 +144,6 @@ def _warm_up():
         _init_vectorstore()
     except Exception:
         pass
-
 
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
@@ -208,7 +201,6 @@ async def upload_document(file: UploadFile = File(...)):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=repr(e))
-
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
