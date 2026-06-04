@@ -138,6 +138,14 @@ def split_documents(documents, chunk_size=1000, chunk_overlap=100):
 async def root():
     return {"status": "ok", "docs": "/docs"}
 
+@app.get("/api/health")
+async def health():
+    try:
+        _init_vectorstore()
+        return {"status": "healthy", "ready": True}
+    except Exception as e:
+        return {"status": "healthy", "ready": False, "error": str(e)}
+
 @app.on_event("startup")
 def _warm_up():
     try:
@@ -160,7 +168,7 @@ async def upload_document(file: UploadFile = File(...)):
         if vectorstore is None:
             raise HTTPException(status_code=503, detail="Vector store is initializing. Please try again.")
 
-        tmp = f"temp_{file.filename}"
+        tmp = f"/tmp/temp_{file.filename}"
         with open(tmp, "wb") as buf:
             shutil.copyfileobj(file.file, buf)
 
