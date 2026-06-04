@@ -17,6 +17,11 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document
+from langchain_core.vectorstores import VectorStore
+
+import threading
+
+_init_lock = threading.Lock()
 
 app = FastAPI(title="smartuni RAG API (Powered by Gemini)")
 
@@ -67,30 +72,46 @@ class LocalHashEmbeddingFunction(Embeddings):
 
 embedding_fn = LocalHashEmbeddingFunction()
 
-vectorstore = Chroma(persist_directory="./chroma_db", embedding_function=embedding_fn)
-retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+vectorstore: VectorStore | None = None
+retriever = None
+rag_chain = None
 
-template = (
-    "You are a helpful college teaching assistant. "
-    "Answer the student's question based ONLY on the following context. "
-    "If the answer is not contained in the context, strictly say "
-    "'I'm sorry, that information is not in the uploaded course materials.' "
-    "Do not use outside knowledge.\n\n"
-    "Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
-)
-prompt = ChatPromptTemplate.from_template(template)
+def _init_vectorstore():
+    global vectorstore, retriever, rag_chain
+    if vectorstore is not None:
+        return
+    with _init_lock:
+        if vectorstore is not None:
+            return
+        vectorstore = Chroma(persist_directory="./chroma_db", embedding_function=embedding_fn)
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
+        template = (
+            "You are a helpful college teaching assistant. "
+            "Answer the student's question based ONLY on the following context. "
+            "If the answer is not contained in the context, strictly say "
+            "'I'm sorry, that information is not in the uploaded course materials.' "
+            "Do not use outside knowledge.\n\n"
+            "Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
+        )
+        prompt = ChatPromptTemplate.from_template(template)
+
+        rag_chain = (
+            {"context": retriever | format_docs, "question": RunnablePassthrough()}
+            | prompt
+            | llm
+            | StrOutputParser()
+        )
+
+
+def get_rag_chain():
+    _init_vectorstore()
+    if rag_chain is None:
+        raise HTTPException(status_code=503, detail="RAG system is initializing. Please try again.")
+    return rag_chain
 
 def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
-
-
-rag_chain = (
-    {"context": retriever | format_docs, "question": RunnablePassthrough()}
-    | prompt
-    | llm
-    | StrOutputParser()
-)
 
 
 class ChatRequest(BaseModel):
@@ -124,6 +145,14 @@ async def root():
     return {"status": "ok", "docs": "/docs"}
 
 
+@app.on_event("startup")
+def _warm_up():
+    try:
+        _init_vectorstore()
+    except Exception:
+        pass
+
+
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
     filename = (file.filename or "").lower()
@@ -135,6 +164,9 @@ async def upload_document(file: UploadFile = File(...)):
                 status_code=400,
                 detail="عفواً، النظام مهيأ حالياً لاستقبال ملفات PDF و Word (.docx) فقط.",
             )
+
+        if vectorstore is None:
+            raise HTTPException(status_code=503, detail="Vector store is initializing. Please try again.")
 
         tmp = f"temp_{file.filename}"
         with open(tmp, "wb") as buf:
@@ -182,8 +214,11 @@ async def upload_document(file: UploadFile = File(...)):
 @app.post("/chat")
 async def chat(request: ChatRequest):
     try:
-        answer = rag_chain.invoke(request.question)
+        chain = get_rag_chain()
+        answer = chain.invoke(request.question)
         return {"answer": answer}
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=repr(e))
